@@ -107,6 +107,7 @@ class SegmentAPI(ServerAPI):
 
     @override
     def heartbeat(self) -> int:
+        self._raise_for_running()
         return int(time.time_ns())
 
     @override
@@ -921,7 +922,6 @@ class SegmentAPI(ServerAPI):
     @trace_method("SegmentAPI.close", OpenTelemetryGranularity.ALL)
     @override
     def close(self) -> None:
-        self._raise_for_running()
         self._system.stop()
 
 
