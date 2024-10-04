@@ -16,8 +16,6 @@ import chromadb.server.fastapi
 import pytest
 import tempfile
 
-from testcontainers.chroma import ChromaContainer
-
 
 @pytest.fixture
 def ephemeral_api() -> Generator[ClientAPI, None, None]:
@@ -202,27 +200,6 @@ def test_persistent_client_use_after_close() -> None:
         persistent_api.heartbeat()
 
 
-@pytest.fixture(params=["sync_client", "async_client"])
-def http_client_with_tc(
-    request: pytest.FixtureRequest,
-) -> Generator[ClientAPI, None, None]:
-    with ChromaContainer() as chroma:
-        config = chroma.get_config()
-        if request.param == "sync_client":
-            http_api = chromadb.HttpClient(host=config["host"], port=config["port"])
-            yield http_api
-            http_api.clear_system_cache()
-        else:
-
-            async def init_client() -> AsyncClientAPI:
-                http_api = await chromadb.AsyncHttpClient(
-                    host=config["host"], port=config["port"]
-                )
-                return http_api
-
-            yield asyncio.get_event_loop().run_until_complete(init_client())
-
-
 def get_connection_count(api_client: ClientAPI) -> int:
     if isinstance(api_client, AsyncClientAPI):
         connections = 0
@@ -235,7 +212,11 @@ def get_connection_count(api_client: ClientAPI) -> int:
         return len(_pool._connections)
 
 
-def test_http_client_close(http_client_with_tc: ClientAPI) -> None:
+def test_http_client_close(client: ClientAPI) -> None:
+    if client.get_settings().chroma_api_impl == "chromadb.api.segment.SegmentAPI":
+        pytest.skip(
+            "Skipping test that closes the persistent client in integration test"
+        )
     if os.environ.get("CHROMA_INTEGRATION_TEST_ONLY") == "1":
         pytest.skip(
             "Skipping test that closes the persistent client in integration test"
@@ -244,23 +225,27 @@ def test_http_client_close(http_client_with_tc: ClientAPI) -> None:
     async def run_in_async(c: AsyncClientAPI):
         col = await c.create_collection("test" + uuid.uuid4().hex)
         await col.add(ids=["1"], documents=["test"])
-        assert get_connection_count(http_client_with_tc) > 0
+        assert get_connection_count(client) > 0
         await c.close()
-        assert get_connection_count(http_client_with_tc) == 0
+        assert get_connection_count(client) == 0
 
-    if isinstance(http_client_with_tc, AsyncClientAPI):
+    if isinstance(client, AsyncClientAPI):
         asyncio.get_event_loop().run_until_complete(
-            run_in_async(cast(AsyncClientAPI, http_client_with_tc))
+            run_in_async(cast(AsyncClientAPI, client))
         )
     else:
-        col = http_client_with_tc.create_collection("test" + uuid.uuid4().hex)
+        col = client.create_collection("test" + uuid.uuid4().hex)
         col.add(ids=["1"], documents=["test"])
-        assert get_connection_count(http_client_with_tc) > 0
-        http_client_with_tc.close()
-        assert get_connection_count(http_client_with_tc) == 0
+        assert get_connection_count(client) > 0
+        client.close()
+        assert get_connection_count(client) == 0
 
 
-def test_http_client_use_after_close(http_client_with_tc: ClientAPI) -> None:
+def test_http_client_use_after_close(client: ClientAPI) -> None:
+    if client.get_settings().chroma_api_impl == "chromadb.api.segment.SegmentAPI":
+        pytest.skip(
+            "Skipping test that closes the persistent client in integration test"
+        )
     if os.environ.get("CHROMA_INTEGRATION_TEST_ONLY") == "1":
         pytest.skip(
             "Skipping test that closes the persistent client in integration test"
@@ -269,9 +254,9 @@ def test_http_client_use_after_close(http_client_with_tc: ClientAPI) -> None:
     async def run_in_async(c: AsyncClientAPI):
         col = await c.create_collection("test" + uuid.uuid4().hex)
         await col.add(ids=["1"], documents=["test"])
-        assert get_connection_count(http_client_with_tc) > 0
+        assert get_connection_count(client) > 0
         await c.close()
-        assert get_connection_count(http_client_with_tc) == 0
+        assert get_connection_count(client) == 0
         with pytest.raises(RuntimeError, match="Component not running"):
             await c.heartbeat()
         with pytest.raises(RuntimeError, match="Component not running"):
@@ -293,18 +278,18 @@ def test_http_client_use_after_close(http_client_with_tc: ClientAPI) -> None:
         with pytest.raises(RuntimeError, match="Component not running"):
             await c.list_collections()
 
-    if isinstance(http_client_with_tc, AsyncClientAPI):
+    if isinstance(client, AsyncClientAPI):
         asyncio.get_event_loop().run_until_complete(
-            run_in_async(cast(AsyncClientAPI, http_client_with_tc))
+            run_in_async(cast(AsyncClientAPI, client))
         )
     else:
-        col = http_client_with_tc.create_collection("test" + uuid.uuid4().hex)
+        col = client.create_collection("test" + uuid.uuid4().hex)
         col.add(ids=["1"], documents=["test"])
-        assert get_connection_count(http_client_with_tc) > 0
-        http_client_with_tc.close()
-        assert get_connection_count(http_client_with_tc) == 0
+        assert get_connection_count(client) > 0
+        client.close()
+        assert get_connection_count(client) == 0
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.heartbeat()
+            client.heartbeat()
         with pytest.raises(RuntimeError, match="Component not running"):
             col.add(ids=["1"], documents=["test"])
         with pytest.raises(RuntimeError, match="Component not running"):
@@ -316,16 +301,16 @@ def test_http_client_use_after_close(http_client_with_tc: ClientAPI) -> None:
         with pytest.raises(RuntimeError, match="Component not running"):
             col.count()
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.create_collection("test1")
+            client.create_collection("test1")
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.get_collection("test")
+            client.get_collection("test")
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.get_or_create_collection("test")
+            client.get_or_create_collection("test")
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.list_collections()
+            client.list_collections()
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.delete_collection("test")
+            client.delete_collection("test")
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.count_collections()
+            client.count_collections()
         with pytest.raises(RuntimeError, match="Component not running"):
-            http_client_with_tc.heartbeat()
+            client.heartbeat()
